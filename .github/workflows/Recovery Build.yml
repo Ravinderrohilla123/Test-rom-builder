@@ -1,85 +1,142 @@
-name: Android ROM Build
+name: Recovery Build
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      SYNC_URL:
+        description: 'SYNC_URL'
+        required: true
+        default: 'https://gitlab.com/OrangeFox/sync.git'
+      DEVICE_TREE_URL:
+        description: 'DEVICE_TREE_URL'
+        required: true
+        default: 'https://github.com/Ravinderrohilla123/Devtree_nonbooting.git' 
+      DEVICE_PATH:
+        description: 'DEVICE_PATH'
+        required: true
+        default: 'device/realme/RMX2117'
+      COMMON_TREE_URL:
+        description: 'COMMON_TREE_URL (if no common tree, leave blank)'
+        required: false
+      COMMON_PATH:
+        description: 'COMMON_PATH (if no common tree, leave blank)'
+        required: false
+      DEVICE_NAME:
+        description: 'DEVICE_NAME'
+        required: true
+        default: 'RMX2117'
+      MAKEFILE_NAME:
+        description: 'MAKEFILE_NAME'
+        required: true
+        default: 'aosp_RMX2117'
+      
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    if: github.event.repository.owner.id == github.event.sender.id
+    runs-on: ubuntu-20.04
+    permissions:
+      contents: write
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v2
+ 
+    # You might want to Checkout your repo first, but not mandatory
+    - name: Check Out
+      uses: actions/checkout@v3
 
-    - name: Set up Java
-      uses: actions/setup-java@v2
-      with:
-        distribution: 'adopt'
-        java-version: '11'
+    # Cleanup The Actions Workspace Using Custom Composite Run Actions
+    - name: Cleanup
+      uses: rokibhasansagar/slimhub_actions@main
 
-    - name: Install Dependencies
+    - name: Initialize workspace
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          bc \
-          bison \
-          build-essential \
-          ccache \
-          curl \
-          flex \
-          g++-multilib \
-          gcc-multilib \
-          git \
-          gnupg \
-          gperf \
-          imagemagick \
-          lib32ncurses5-dev \
-          lib32readline-dev \
-          lib32z1-dev \
-          liblz4-tool \
-          libncurses5-dev \
-          libsdl1.2-dev \
-          libssl-dev \
-          libxml2 \
-          libxml2-utils \
-          lzop \
-          pngcrush \
-          schedtool \
-          squashfs-tools \
-          xsltproc \
-          zip \
-          zlib1g-dev
+        mkdir workspace
+        cd workspace
+        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+      id: pwd
 
-    - name: Download Repo Tool
+    - name: Prepare the build environment
       run: |
-        mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        sudo add-apt-repository ppa:openjdk-r/ppa
+        apt-get update
+        sudo apt install openssh-server screen python3 git openjdk-8-jdk android-tools-adb bc bison \ 
+        build-essential curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses-dev \ 
+        lib32readline-dev lib32z1-dev  liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev \
+        libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc yasm zip zlib1g-dev \
+        libtinfo5 libncurses5
+        mkdir ~/bin
+
+        PATH=~/bin:$PATH
+
+        cd ~/bin
+
+        curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+
         chmod a+x ~/bin/repo
-        export PATH=~/bin:$PATH
+        git clone https://github.com/akhilnarang/scripts.git scripts
 
-    - name: Initialize Repo
-      run: |
+        cd scripts
+
+        bash setup/android_build_env.sh
+       
+        
+       
+        
         repo init -u https://github.com/PixelExperience/manifest -b thirteen
+
         repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
-    - name: Sync Device Tree and Vendor Tree
-      run: |
-        git clone https://github.com/Ravinderrohilla123/Devtree_nonbooting.git device/realme/RMX2117
+       
         git clone https://github.com/Ravinderrohilla123/Vendor_nonbooting.git vendor/realme/RMX2117
+      
+    
 
-    - name: Source Environment Variables
-      run: source build/envsetup.sh
-
-    - name: Lunch Configuration
-      run: lunch aosp_RMX2117-userdebug
-
-    - name: Build ROM
+    - name: Clone device tree
       run: |
-        mka bacon
+        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v2
+    - name: Clone common tree
+      if: |
+        github.event.inputs.COMMON_TREE_URL != null
+        && github.event.inputs.COMMON_PATH != null
+      run: |
+        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
       with:
-        name: rom-artifacts
-        path: out/target/product/rmx2117
+        swap-size-gb: 30
+
+    - name: Building rom
+      run: |
+        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        set +e
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        set -e
+        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-userdebug && make clean && brunch RMX2117 -j$(nproc --all)
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+      continue-on-error: true
+
+    - name: Check the output directory before uploading
+      run: |
+        ls -al ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/
+        echo
+        ls -al ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/
+
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.img
+          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
+        name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
+        tag_name: ${{ github.run_id }}
+        body: |
+          Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
+          Device: ${{ github.event.inputs.DEVICE_NAME }}
+          Target: ${{ github.event.inputs.BUILD_TARGET }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
