@@ -58,8 +58,9 @@ jobs:
       run: |
        
         
-        sudo add-apt-repository ppa:openjdk-r/ppa
+        
         sudo apt-get update
+       
        
         sudo apt install openssh-server screen python3 git openjdk-8-jdk android-tools-adb bc bison \ 
         build-essential curl flex g++-multilib gcc-multilib gnupg gperf imagemagick lib32ncurses-dev \ 
